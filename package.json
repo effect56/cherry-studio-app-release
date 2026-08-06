@@ -1,7 +1,7 @@
 {
   "name": "cherry-studio-app",
   "main": "expo-router/entry",
-  "version": "1.0.0",
+  "version": "0.2.1",
   "scripts": {
     "packages:build": "pnpm --filter @cherrystudio/ai-sdk-provider build && pnpm --filter @cherrystudio/ai-core build",
     "dev": "pnpm packages:build && expo start --dev-client",
