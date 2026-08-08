@@ -22,7 +22,6 @@ import { useUniwind } from 'uniwind';
 import { Image } from '@/frontend/components/nativePrimitives';
 import { usePreference } from '@/frontend/data/hooks';
 
-import { usePrefetchProviders } from './hooks/usePrefetchProviders';
 import { ProfileHero, ProfileStickyBar, useProfileHeaderAnimation } from './profileHero';
 
 export default function SettingsScreen() {
@@ -32,7 +31,6 @@ export default function SettingsScreen() {
   const { theme } = useUniwind();
   const tabBarHeight = useBottomTabBarHeight();
   const [userName] = usePreference('app.user.name');
-  const prefetchProviders = usePrefetchProviders();
   const { lockProgress, onScroll, scrollY, toggleHeroLock } = useProfileHeaderAnimation();
   const mcpIcon = resolveProviderIcon('mcp')?.[theme === 'dark' ? 'dark' : 'light'];
 
@@ -52,7 +50,7 @@ export default function SettingsScreen() {
   const contentContainerStyle = useMemo(() => ({ paddingBottom: tabBarHeight }), [tabBarHeight]);
 
   return (
-    <View className="flex-1 bg-background">
+    <View className="flex-1 bg-grouped-background">
       <Animated.ScrollView
         alwaysBounceVertical
         contentContainerStyle={contentContainerStyle}
@@ -80,7 +78,6 @@ export default function SettingsScreen() {
               label={t('settings.items.modelService')}
               leading={<CloudIcon className="size-5 text-foreground" strokeWidth={2} />}
               onPress={() => router.push('/settings/provider')}
-              onPressIn={prefetchProviders}
             />
             <Section.Item
               label={t('settings.items.defaultModel')}
