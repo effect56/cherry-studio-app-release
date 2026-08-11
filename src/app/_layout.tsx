@@ -11,7 +11,7 @@ import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { withUniwind } from 'uniwind';
 
 import { AppBootstrapGate, AppBootstrapProvider } from '@/bootstrap';
-import { AppAlertProvider } from '@/frontend/components/AppAlertProvider';
+import { AlertProvider } from '@/frontend/components/AlertProvider';
 import { NavigationThemeProvider } from '@/frontend/components/navigation';
 import { QueryProvider } from '@/frontend/data';
 import { useThemeColor } from '@/frontend/hooks/useThemeColor';
@@ -32,11 +32,11 @@ export default function RootLayout() {
             <AppBootstrapProvider>
               <AppBootstrapGate>
                 <NavigationThemeProvider>
-                  <AppAlertProvider>
+                  <AlertProvider>
                     <BottomSheetProvider>
                       <RootStack />
                     </BottomSheetProvider>
-                  </AppAlertProvider>
+                  </AlertProvider>
                 </NavigationThemeProvider>
               </AppBootstrapGate>
             </AppBootstrapProvider>
@@ -58,7 +58,7 @@ function RootStack() {
   return (
     <Stack
       screenOptions={{
-        headerShadowVisible: isIOS ? undefined : false,
+        headerShadowVisible: false,
         headerStyle: isIOS ? undefined : { backgroundColor },
         headerTransparent: isLiquidGlassAvailable,
         headerTintColor: foregroundColor,
@@ -66,6 +66,14 @@ function RootStack() {
     >
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       <Stack.Screen name="onboarding" options={{ headerShown: false }} />
+      <Stack.Screen
+        name="oauth/authorize"
+        options={{
+          headerStyle: { backgroundColor },
+          headerTransparent: false,
+          presentation: 'modal',
+        }}
+      />
       <Stack.Screen
         name="topics"
         options={{

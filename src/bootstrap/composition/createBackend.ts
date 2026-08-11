@@ -3,8 +3,8 @@ import type { UniqueModelId } from '@cherrystudio/universal/data/types/model';
 import { readUIMessageStream } from 'ai';
 
 import { ChatRuntime } from '@/backend/ai/streamManager/ChatRuntime';
-import type { FileContentQueries } from '@/backend/data/api/handlers/files';
 import type { McpServerMutations } from '@/backend/data/api/handlers/mcpServers';
+import type { DbService } from '@/backend/data/db/DbService';
 import { materializeRemoteModels } from '@/backend/data/services/materializeRemoteModels';
 import { canDeleteProvider } from '@/backend/data/services/ProviderService';
 import { CherryInClient } from '@/backend/services/cherryin/CherryInClient';
@@ -12,14 +12,18 @@ import {
   createInternalEntry,
   createMessageParts,
   discardInternalEntries,
+  getInternalFileUri,
   imageUriToDataUrl,
-  resolveInternalFileUri,
 } from '@/backend/services/file/fileStorage';
+import {
+  createJobRuntime,
+  jobHandlerEntry,
+  type JobRuntime,
+} from '@/backend/services/jobs/JobRuntime';
 import { createMcpModule } from '@/backend/services/mcp/createMcpModule';
 import { createModelsModule } from '@/backend/services/models/createModelsModule';
-import { OAuthRuntimeService } from '@/backend/services/oauth/runtime/OAuthRuntimeService';
-import { ProviderAuthConfigOAuthTokenStore } from '@/backend/services/oauth/runtime/OAuthTokenStore';
 import { createPaintingsModule } from '@/backend/services/paintings/createPaintingsModule';
+import { createPaintingGenerateJobHandler } from '@/backend/services/paintings/tasks/paintingGenerateJobHandler';
 import { createPermissionsModule } from '@/backend/services/permissions/createPermissionsModule';
 import { createProfileModule } from '@/backend/services/profile/createProfileModule';
 import {
@@ -37,29 +41,22 @@ import type { Backend } from '@/shared/contracts';
 export type BackendComposition = {
   backend: Backend;
   dataApiDependencies: {
-    fileContent: FileContentQueries;
     mcpServerMutations: McpServerMutations;
   };
+  jobRuntime: JobRuntime;
   dispose(): Promise<void>;
 };
 
-export function createBackend(services: BackendServices): BackendComposition {
-  const oauth = new OAuthRuntimeService({
-    providers: {
-      listApiKeys: (providerId) => services.provider.listApiKeys(providerId),
-      replaceApiKeys: (providerId, keys) => services.provider.replaceApiKeys(providerId, keys),
-      update: (providerId, input) => services.provider.update(providerId, input),
-    },
-    tokenStore: new ProviderAuthConfigOAuthTokenStore({
-      getAuthConfig: (providerId) => services.provider.getAuthConfig(providerId),
-      update: (providerId, input) => services.provider.update(providerId, input),
-    }),
-  });
+export function createBackend(
+  services: BackendServices,
+  infrastructure: { dbService: DbService },
+): BackendComposition {
+  const { dbService } = infrastructure;
   const cherryin = new CherryInClient({
     oauth: {
       authenticatedFetch: (providerId, buildRequest, doFetch, options) =>
-        oauth.authenticatedFetch(providerId, buildRequest, doFetch, options),
-      hasToken: (providerId) => oauth.hasToken(providerId),
+        services.oauthSession.authenticatedFetch(providerId, buildRequest, doFetch, options),
+      hasToken: (providerId) => services.oauthSession.hasToken(providerId),
     },
   });
   const chat = new ChatRuntime({
@@ -106,16 +103,42 @@ export function createBackend(services: BackendServices): BackendComposition {
       update: (id, input) => services.provider.update(id, input),
     },
   });
+  const paintingStorage = {
+    createInternalEntry: (input: Parameters<typeof createInternalEntry>[1]) =>
+      createInternalEntry(services.fileEntry, input),
+    discard: (entries: Parameters<typeof discardInternalEntries>[1]) =>
+      discardInternalEntries(services.fileEntry, entries),
+    readDataUrl: imageUriToDataUrl,
+    getUri: getInternalFileUri,
+  };
+  const jobRuntime = createJobRuntime({
+    dbService,
+    handlers: [
+      jobHandlerEntry(
+        'painting.generate',
+        createPaintingGenerateJobHandler({
+          ai: services.ai,
+          paintings: services.painting,
+          storage: paintingStorage,
+        }),
+      ),
+    ],
+    jobService: services.job,
+  });
   const paintings = createPaintingsModule({
-    ai: services.ai,
+    db: { withWriteTx: (fn) => dbService.withWriteTx(fn) },
     files: services.fileContent,
-    paintings: services.painting,
-    storage: {
-      createInternalEntry: (input) => createInternalEntry(services.fileEntry, input),
-      discard: (entries) => discardInternalEntries(services.fileEntry, entries),
-      readDataUrl: imageUriToDataUrl,
-      resolveUri: resolveInternalFileUri,
+    jobs: {
+      cancelGenerate: async (jobId) => {
+        await jobRuntime.cancel(jobId);
+      },
+      enqueueGenerateTx: (tx, input, opts) =>
+        jobRuntime.enqueueTx(tx, 'painting.generate', input, opts),
+      findActiveGenerateTx: (tx, idempotencyKey) =>
+        services.job.findActiveByIdempotencyKeyTx(tx, idempotencyKey),
     },
+    paintings: services.painting,
+    storage: paintingStorage,
   });
   const mcp = createMcpModule({
     runtime: {
@@ -166,9 +189,14 @@ export function createBackend(services: BackendServices): BackendComposition {
     backend: {
       chat,
       cherryin,
+      file: {
+        createInternalEntry: services.fileContent.createInternalEntry,
+        deleteIfUnreferenced: services.fileContent.deleteIfUnreferenced,
+        getUri: services.fileContent.getUri,
+      },
       mcp,
       models,
-      oauth,
+      oauth: services.oauth,
       paintings,
       permissions,
       profile,
@@ -176,10 +204,18 @@ export function createBackend(services: BackendServices): BackendComposition {
       webSearch: services.webSearch,
     },
     dataApiDependencies: {
-      fileContent: services.fileContent,
       mcpServerMutations: mcp,
     },
-    dispose: () => chat.dispose(),
+    jobRuntime,
+    dispose: async () => {
+      // Jobs first: the drain gives in-flight handlers a bounded chance to land
+      // their terminal rows before the caller closes SQLite, and it keeps the
+      // oauth session alive for any authenticated request still in flight.
+      await jobRuntime.dispose();
+      services.oauth.dispose();
+      services.oauthSession.dispose();
+      await chat.dispose();
+    },
   };
 }
 

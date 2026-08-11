@@ -43,7 +43,7 @@ The 90% case. See later sections for full rules and edge cases.
 | Bucket directory (categorical container) | lowercase **plural** noun | `services/`, `hooks/`, `schemas/` |
 | Business / domain module directory | `camelCase` | `assistantPicker/`, `webSearch/` |
 | Large multi-file domain subtree | `src/frontend/features/<name>/` (route-bound) or `camelCase/` (under an owning bucket) | `frontend/features/chat/`, `integrations/webSearch/` |
-| `packages/ui/` (icon registry) directory | `kebab-case` | `icons/`, `icons-webp/` |
+| `packages/ui/` directory | `kebab-case` | `bottom-sheet/`, `icons-webp/` |
 
 > Stateful classes are named by architectural role, not by statefulness alone; see §5.2. Files placed inside any `utils/` directory drop the `Utils` suffix — the directory already declares the role; see §3.2. React Native platform-divergent files carry a `.ios`/`.android` suffix on the base name — see §3.8.
 
@@ -198,7 +198,7 @@ When a directory **is** a component (i.e. contains `index.tsx` exporting the com
 ```
 src/frontend/components/headers/MainHeader/                       ✅
 src/frontend/components/headers/BackHeader/                       ✅
-src/frontend/features/chat/workspace/components/ScrollToBottomButton/  ✅
+src/frontend/components/messagePresentation/components/ScrollToBottomButton/  ✅
 ```
 
 ### 4.3 Bucket Directories — `lowercase plural noun`
@@ -235,11 +235,12 @@ src/backend/services/permissions/                           ✅
 
 Placement — whether a domain module lives as a large subtree or as a subdirectory inside a bucket like `services/` — is governed by §4.10; this section governs only its name.
 
-### 4.6 `packages/ui` (icon registry) Directories — `kebab-case`
+### 4.6 `packages/ui` Directories — `kebab-case`
 
-Everything inside `packages/ui/` (both files and directories) uses `kebab-case` for package-local consistency. `packages/ui` (`@cherrystudio/ui`) is the shared **icon registry**, not a shadcn component library:
+Everything inside `packages/ui/` (both files and directories) uses `kebab-case` for package-local consistency. `packages/ui` (`@cherrystudio/ui`) owns shared mobile interaction components and the icon registry:
 
 ```
+packages/ui/src/components/bottom-sheet/  ✅
 packages/ui/src/icons/        ✅
 packages/ui/src/icons-webp/    ✅
 packages/ui/src/icons-webp/provider-aliases.ts   ✅
@@ -316,16 +317,20 @@ A **large multi-file domain** co-locates *everything* it owns — its components
 
 This is the §4.4 promotion rule applied at the top level: a domain graduates from "a file (plus maybe one util) in a bucket" to "its own subtree" only once the additional files actually arrive and span more than one concern. Do not pre-create a subtree for an anticipated module.
 
-**Canonical example** — `src/frontend/features/chat/`:
+**Canonical examples** — route-owned Chat orchestration and shared message presentation:
 
 ```
 src/frontend/features/chat/
 ├── ChatScreen.tsx        # the route-bound screen component (§3.1)
 ├── input/                # ChatInput + its components/hooks/utils
-├── workspace/            # message list + scroll/layout sub-modules
-├── messageContent/       # message part renderers
-├── messageItem/          # user/assistant message items
+├── workspace/            # runtime projection, loading gates, approvals, composer placement
 └── runtime/              # React subscription layer for the app-owned ChatRuntime
+
+src/frontend/components/messagePresentation/
+├── components/           # virtualized MessageList and its private platform controls
+├── messageContent/       # structured message part renderers and hooks
+├── messageRow/           # user/assistant rows and entry animation
+└── utils/                # private presentation mappings
 ```
 
 Layer-level buckets such as `frontend/components`, `frontend/hooks`, `backend/services`,
@@ -550,7 +555,7 @@ Naming a new FILE
 ├─ React component (.tsx)?
 │  ├─ Platform-divergent?                 → PascalCase.ios.tsx / .android.tsx  (MainHeader.ios.tsx, §3.8)
 │  ├─ Under src/app/ (Expo Router)?       → kebab-case.tsx + reserved tokens   (api-key-settings.tsx, _layout.tsx, §6.6)
-│  ├─ Under packages/ui/ (icon registry)? → kebab-case.tsx                      (§4.6)
+│  ├─ Under packages/ui/?             → kebab-case.tsx                      (§4.6)
 │  └─ Under frontend components/features? → PascalCase.tsx                      (HeaderIconButton.tsx, ChatScreen.tsx)
 ├─ React hook?                    → useXxx.ts(x)    (useMessages.ts; .tsx only if it returns JSX)
 ├─ Primary export is a class?     → PascalCase.ts   (ChatRuntime.ts; choose its role in §5.2)
@@ -564,7 +569,7 @@ Naming a new FILE
 
 Naming a new DIRECTORY
 ├─ npm package (packages/*)?      → kebab-case      (ai-sdk-provider)
-├─ Under packages/ui/?            → kebab-case      (icons, icons-webp)
+├─ Under packages/ui/?            → kebab-case      (bottom-sheet, icons-webp)
 ├─ Is itself a React component?   → PascalCase      (MainHeader, ScrollToBottomButton)
 ├─ Bucket / categorical container? → lowercase plural noun  (services, hooks, schemas)
 ├─ Large route-bound UI domain?   → src/frontend/features/<name>/       (frontend/features/chat; §4.10)

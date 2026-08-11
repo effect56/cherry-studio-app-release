@@ -24,7 +24,12 @@ export function createAppBootstrapRuntime(): AppBootstrapRuntime {
   const cacheService = new CacheService();
   const dbService = new DbService();
   const services = createBackendServices(dbService, cacheService);
-  const { backend, dataApiDependencies, dispose: disposeBackend } = createBackend(services);
+  const {
+    backend,
+    dataApiDependencies,
+    dispose: disposeBackend,
+    jobRuntime,
+  } = createBackend(services, { dbService });
   let disposePromise: Promise<void> | undefined;
   const dataApi = new DataApiService(
     createDataApiHandlers({
@@ -39,7 +44,6 @@ export function createAppBootstrapRuntime(): AppBootstrapRuntime {
       assistants: services.assistant,
       contentSearch: services.contentSearch,
       entitySearch: services.entitySearch,
-      fileContent: dataApiDependencies.fileContent,
       files: services.fileEntry,
       fileRefs: services.fileRef,
       groups: services.group,
@@ -84,6 +88,6 @@ export function createAppBootstrapRuntime(): AppBootstrapRuntime {
       await services.preference.init();
       await initializeAppRuntime(services);
     },
-    runPostReadyTasks: () => runPostReadyTasks(services),
+    runPostReadyTasks: () => runPostReadyTasks(services, { jobRuntime }),
   };
 }

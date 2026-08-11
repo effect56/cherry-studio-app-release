@@ -1,28 +1,16 @@
-import type { Message } from '@cherrystudio/universal/data/types/message';
-import { useKeyboardChatComposerInset } from '@legendapp/list/keyboard';
-import type { LegendListRef } from '@legendapp/list/react-native';
 import * as Crypto from 'expo-crypto';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useHeaderHeight } from 'expo-router/react-navigation';
-import { type RefObject, useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ActivityIndicator, type LayoutChangeEvent, Text, View } from 'react-native';
-import { KeyboardStickyView } from 'react-native-keyboard-controller';
-import { useSharedValue } from 'react-native-reanimated';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { ActivityIndicator, Text, View } from 'react-native';
 
-import { ChatInputProvider } from '@/frontend/features/chat/input';
 import {
-  chatInputHorizontalScreenInset,
-  chatInputMinBottomPadding,
-  getChatInputKeyboardStickyOffset,
-} from '@/frontend/features/chat/input/chatInputLayout';
-import {
-  ChatMessageList,
-  ChatWorkspaceFrame,
-  ScrollToBottomButton,
-  useFloatingChatInputLayout,
-} from '@/frontend/features/chat/workspace';
+  ComposerDock,
+  ManagedComposerProvider,
+  useComposerDockLayout,
+} from '@/frontend/components/composer';
+import { MessageList } from '@/frontend/components/messagePresentation';
 import { isIOS } from '@/frontend/utils/constants';
 
 import { PaintingInput } from '../components/PaintingInput';
@@ -37,11 +25,8 @@ import {
   createPendingPaintingConversationMessages,
 } from './utils/paintingConversationMessages';
 
-const SCROLL_BUTTON_GAP_ABOVE_INPUT = 5;
-
 type PendingTurn = {
   assistantMessageId: string;
-  createdAt: string;
   input: PaintingGenerationInput;
   userMessageId: string;
 };
@@ -80,9 +65,9 @@ export function PaintingConversationScreen() {
           </Text>
         </View>
       ) : (
-        <ChatInputProvider key={painting.id}>
+        <ManagedComposerProvider key={painting.id}>
           <PaintingConversationWorkspace files={files} painting={painting} />
-        </ChatInputProvider>
+        </ManagedComposerProvider>
       )}
     </View>
   );
@@ -97,45 +82,32 @@ function PaintingConversationWorkspace({
 }) {
   const router = useRouter();
   const headerHeight = useHeaderHeight();
-  const listRef = useRef<LegendListRef | null>(null);
-  const composerRef = useRef<View | null>(null);
-  const isAtBottom = useSharedValue(true);
   const [pendingTurn, setPendingTurn] = useState<PendingTurn | null>(null);
-  const generation = usePaintingGeneration({ initialOutputs: [] });
+  const { cancel, generate, status } = usePaintingGeneration({ initialOutputs: [] });
   const { contentBottomInset, handleInputHeightChange, inputHeightShared, keyboardOffset } =
-    useFloatingChatInputLayout();
-  const { contentInsetEndAdjustment, onComposerLayout } = useKeyboardChatComposerInset(
-    listRef,
-    composerRef,
-  );
-  const messages = useMemo<Message[]>(
+    useComposerDockLayout();
+  const messages = useMemo(
     () =>
       pendingTurn
         ? createPendingPaintingConversationMessages(pendingTurn)
         : createPaintingConversationMessages(painting, files),
     [files, painting, pendingTurn],
   );
-  const handleScrollToEnd = useCallback(() => {
-    void listRef.current?.scrollToEnd({ animated: true });
-  }, []);
-  const handleLoadOlder = useCallback(async () => {}, []);
   const handleGenerate = useCallback(
     async (input: PaintingGenerationInput) => {
-      const createdAt = new Date().toISOString();
       setPendingTurn({
         assistantMessageId: Crypto.randomUUID(),
-        createdAt,
         input,
         userMessageId: Crypto.randomUUID(),
       });
       try {
-        return await generation.generate(input);
+        return await generate(input);
       } catch (error) {
         setPendingTurn(null);
         throw error;
       }
     },
-    [generation.generate],
+    [generate],
   );
   const handleGenerated = useCallback(
     (result: PaintingGenerationResult) => {
@@ -149,73 +121,24 @@ function PaintingConversationWorkspace({
   );
 
   return (
-    <ChatWorkspaceFrame>
-      <ChatMessageList
-        anchorIndex={0}
+    <View className="flex-1 bg-background">
+      <MessageList
+        bottomAccessoryHeight={inputHeightShared}
         contentBottomInset={contentBottomInset}
-        contentInsetEndAdjustment={contentInsetEndAdjustment}
         contentTopInset={isIOS ? headerHeight : 0}
-        isAtBottom={isAtBottom}
+        enteringMessageId={pendingTurn?.userMessageId}
         keyboardOffset={keyboardOffset}
-        listRef={listRef}
         messages={messages}
-        onLoadOlder={handleLoadOlder}
       />
-      <FloatingPaintingInput
-        composerRef={composerRef}
-        onComposerLayout={onComposerLayout}
-        onHeightChange={handleInputHeightChange}
-        onCancel={generation.cancel}
-        onGenerate={handleGenerate}
-        onGenerated={handleGenerated}
-        painting={painting}
-        status={generation.status}
-      />
-      <ScrollToBottomButton
-        gap={SCROLL_BUTTON_GAP_ABOVE_INPUT}
-        inputHeight={inputHeightShared}
-        isAtBottom={isAtBottom}
-        onPress={handleScrollToEnd}
-      />
-    </ChatWorkspaceFrame>
-  );
-}
-
-function FloatingPaintingInput({
-  composerRef,
-  onComposerLayout,
-  onHeightChange,
-  ...inputProps
-}: {
-  composerRef: RefObject<View | null>;
-  onComposerLayout: (event: LayoutChangeEvent) => void;
-  onHeightChange: (height: number) => void;
-} & Parameters<typeof PaintingInput>[0]) {
-  const { bottom } = useSafeAreaInsets();
-  const bottomPadding = Math.max(bottom, chatInputMinBottomPadding);
-  const keyboardInputOffset = getChatInputKeyboardStickyOffset(bottom);
-  const handleLayout = useCallback(
-    (event: LayoutChangeEvent) => {
-      onHeightChange(event.nativeEvent.layout.height);
-      onComposerLayout(event);
-    },
-    [onComposerLayout, onHeightChange],
-  );
-
-  return (
-    <View
-      ref={composerRef}
-      className="absolute right-0 bottom-0 left-0 z-10"
-      pointerEvents="box-none"
-      style={{
-        paddingBottom: bottomPadding,
-        paddingHorizontal: chatInputHorizontalScreenInset,
-      }}
-      onLayout={handleLayout}
-    >
-      <KeyboardStickyView offset={{ opened: keyboardInputOffset }}>
-        <PaintingInput {...inputProps} />
-      </KeyboardStickyView>
+      <ComposerDock onHeightChange={handleInputHeightChange}>
+        <PaintingInput
+          onCancel={cancel}
+          onGenerate={handleGenerate}
+          onGenerated={handleGenerated}
+          painting={painting}
+          status={status}
+        />
+      </ComposerDock>
     </View>
   );
 }

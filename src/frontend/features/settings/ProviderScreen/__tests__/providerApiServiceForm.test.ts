@@ -4,13 +4,16 @@ import {
   normalizeApiKeyEntries,
   normalizeApiKeySingleLine,
 } from '../apiService/utils/providerApiServiceApiKeys';
+import { shouldShowApiKeys } from '../apiService/utils/providerApiServiceAuth';
 import {
   getProviderApiServiceApiKeysDirtyState,
   getProviderApiServiceEndpointDirtyState,
 } from '../apiService/utils/providerApiServiceDirtyState';
 import type { EndpointDraft } from '../apiService/utils/providerApiServiceEndpointDraft';
 import {
+  buildCustomProviderCreationPayload,
   canEditProviderEndpoint,
+  findInvalidCustomProviderEndpointUrl,
   getConfigurableEndpointTypesForProvider,
   getProviderPrimaryBaseUrl,
   isConfigurableEndpointType,
@@ -18,6 +21,7 @@ import {
 } from '../apiService/utils/providerApiServiceEndpointRules';
 import {
   buildProviderApiServiceEndpointUpdates,
+  buildProviderPrimaryBaseUrlUpdates,
   ProviderApiServiceSaveError,
 } from '../apiService/utils/providerApiServiceSave';
 
@@ -32,6 +36,12 @@ function createTestEndpointDraft(overrides: Partial<EndpointDraft> = {}): Endpoi
 }
 
 describe('provider API service form helpers', () => {
+  it('hides manual keys only for login-only providers', () => {
+    expect(shouldShowApiKeys('api-key', { authMethods: ['oauth'] })).toBe(false);
+    expect(shouldShowApiKeys('api-key', { authMethods: ['api-key', 'oauth'] })).toBe(true);
+    expect(shouldShowApiKeys('oauth', { authMethods: ['api-key', 'oauth'] })).toBe(true);
+  });
+
   it('removes line breaks from a single API key', () => {
     expect(normalizeApiKeySingleLine('sk-a\r\nsk-b\nsk-c')).toBe('sk-ask-bsk-c');
   });
@@ -61,7 +71,6 @@ describe('provider API service form helpers', () => {
           'openai-chat-completions': ' https://new.example.com ',
           'openai-responses': 'https://responses.example.com',
         },
-        'openai-chat-completions',
         ['openai-chat-completions', 'openai-responses'],
       ),
     ).toEqual({
@@ -75,7 +84,7 @@ describe('provider API service form helpers', () => {
     });
   });
 
-  it('removes empty additional endpoints while preserving primary endpoint metadata', () => {
+  it('removes empty base URLs without dropping endpoint metadata', () => {
     expect(
       mergeEndpointConfigs(
         {
@@ -92,14 +101,50 @@ describe('provider API service form helpers', () => {
           'openai-chat-completions': '',
           'openai-responses': '',
         },
-        'openai-chat-completions',
         ['openai-chat-completions', 'openai-responses'],
       ),
     ).toEqual({
       'openai-chat-completions': {
         reasoningFormatType: 'openai-chat',
       },
+      'openai-responses': {
+        reasoningFormatType: 'openai-responses',
+      },
     });
+  });
+
+  it('builds independent text, image generation, and image editing configs', () => {
+    expect(
+      buildCustomProviderCreationPayload({
+        endpointUrls: {
+          'anthropic-messages': ' https://chat.example.com ',
+          'openai-image-generation': ' https://generate.example.com ',
+          'openai-image-edit': ' https://edit.example.com ',
+        },
+      }),
+    ).toEqual({
+      defaultChatEndpoint: 'anthropic-messages',
+      endpointConfigs: {
+        'anthropic-messages': { baseUrl: 'https://chat.example.com' },
+        'openai-image-generation': { baseUrl: 'https://generate.example.com' },
+        'openai-image-edit': { baseUrl: 'https://edit.example.com' },
+      },
+    });
+  });
+
+  it('validates every configured custom provider endpoint URL', () => {
+    expect(
+      findInvalidCustomProviderEndpointUrl({
+        'openai-chat-completions': 'https://chat.example.com',
+        'openai-image-edit': 'ftp://edit.example.com',
+      }),
+    ).toBe('openai-image-edit');
+    expect(
+      findInvalidCustomProviderEndpointUrl({
+        'openai-chat-completions': 'https://chat.example.com',
+        'openai-image-edit': '',
+      }),
+    ).toBeNull();
   });
 
   it('reads the primary endpoint base URL straight off the provider', () => {
@@ -213,6 +258,39 @@ describe('provider API service form helpers', () => {
     expect(updates.defaultChatEndpoint).toBe('anthropic-messages');
   });
 
+  it('updates only the primary Base URL and preserves endpoint metadata', () => {
+    expect(
+      buildProviderPrimaryBaseUrlUpdates({
+        baseUrl: ' https://next.example.com ',
+        provider: {
+          defaultChatEndpoint: 'openai-chat-completions',
+          endpointConfigs: {
+            'anthropic-messages': {
+              baseUrl: 'https://anthropic.example.com',
+              reasoningFormatType: 'anthropic',
+            },
+            'openai-chat-completions': {
+              baseUrl: 'https://chat.example.com',
+              reasoningFormatType: 'openai-chat',
+            },
+          },
+        } as never,
+      }),
+    ).toEqual({
+      defaultChatEndpoint: 'openai-chat-completions',
+      endpointConfigs: {
+        'anthropic-messages': {
+          baseUrl: 'https://anthropic.example.com',
+          reasoningFormatType: 'anthropic',
+        },
+        'openai-chat-completions': {
+          baseUrl: 'https://next.example.com',
+          reasoningFormatType: 'openai-chat',
+        },
+      },
+    });
+  });
+
   it('normalizes API key entries before they reach the save call', () => {
     expect(
       normalizeApiKeyEntries([
@@ -318,6 +396,8 @@ describe('provider API service form helpers', () => {
       'openai-responses',
       'anthropic-messages',
       'google-generate-content',
+      'openai-image-generation',
+      'openai-image-edit',
     ]);
     expect(getConfigurableEndpointTypesForProvider({ authType: 'iam-gcp' } as never)).toEqual([]);
   });

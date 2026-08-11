@@ -2,6 +2,22 @@ import type { ProviderOptions } from '@ai-sdk/provider-utils';
 import type { AiPlugin } from '@cherrystudio/ai-core';
 import { createAgent } from '@cherrystudio/ai-core';
 import type { StringKeys } from '@cherrystudio/ai-core/provider';
+import type { MediaCapabilities } from '@cherrystudio/ai-runtime/messages';
+import { toModelMessages } from '@cherrystudio/ai-runtime/messages';
+import type { AppProviderSettingsMap } from '@cherrystudio/ai-runtime/provider';
+import {
+  type AgentLoopHooks,
+  composeHooks,
+  mergeUsage,
+  resolveToolLoopTerminalError,
+  safeCall,
+  toMessageMetadataPatch,
+  type ToolExecutionHooks,
+  withReasoningTimingMetadata,
+  wrapForwardedHook,
+  wrapToolsWithExecutionHooks,
+  ZERO_USAGE,
+} from '@cherrystudio/ai-runtime/runtime';
 import type {
   LanguageModelUsage,
   ModelMessage,
@@ -17,21 +33,9 @@ import * as Crypto from 'expo-crypto';
 import { isAbortError } from '@/backend/services/webSearch/utils/errors';
 import { loggerService } from '@/shared/core/logger/LoggerService';
 
-import type { MediaCapabilities } from '../../messages/messageCapabilities';
-import { toModelMessages } from '../../messages/messageRules';
-import { withReasoningTimingMetadata } from '../../streamManager/withReasoningTimingMetadata';
 import type { RequestContext } from '../../tools';
-import type { AppProviderSettingsMap } from '../../types';
-import { safeCall, wrapForwardedHook, wrapToolsWithExecutionHooks } from './loop/hookRunner';
-import { resolveToolLoopTerminalError } from './loop/toolLoopTermination';
-import type { AgentLoopHooks, ToolExecutionHooks } from './loop/types';
-import { mergeUsage, toMessageMetadataPatch, ZERO_USAGE } from './observers/usage';
-import { composeHooks } from './params/composeHooks';
 
 type AppProviderKey = StringKeys<AppProviderSettingsMap>;
-type ObserverMap = {
-  [Key in keyof AgentLoopHooks]?: Array<NonNullable<AgentLoopHooks[Key]>>;
-};
 
 const logger = loggerService.withContext('agentLoop');
 
@@ -55,7 +59,6 @@ export interface AgentOptions {
 
 export interface AgentParams<Key extends AppProviderKey = AppProviderKey> {
   context?: RequestContext;
-  hookParts?: ReadonlyArray<Partial<AgentLoopHooks>>;
   mediaCapabilities?: MediaCapabilities;
   messageId?: string;
   modelId: string;
@@ -70,35 +73,10 @@ export interface AgentParams<Key extends AppProviderKey = AppProviderKey> {
 }
 
 export class Agent<Key extends AppProviderKey = AppProviderKey> {
-  private readonly observers: ObserverMap = {};
-  private currentWriter?: WritableStreamDefaultWriter<UIMessageChunk>;
-
   constructor(public readonly params: AgentParams<Key>) {}
-
-  on<Hook extends keyof AgentLoopHooks>(
-    hook: Hook,
-    observer: NonNullable<AgentLoopHooks[Hook]>,
-  ): () => void {
-    const observers = (this.observers[hook] ??= []) as Array<NonNullable<AgentLoopHooks[Hook]>>;
-    observers.push(observer);
-    return () => {
-      const index = observers.indexOf(observer);
-      if (index >= 0) observers.splice(index, 1);
-    };
-  }
-
-  write(chunk: UIMessageChunk): void {
-    void this.currentWriter?.write(chunk).catch(() => undefined);
-  }
 
   private composedHooks(extraParts: ReadonlyArray<Partial<AgentLoopHooks>> = []): AgentLoopHooks {
     const parts: Array<Partial<AgentLoopHooks>> = [];
-    for (const hook of Object.keys(this.observers) as Array<keyof AgentLoopHooks>) {
-      for (const observer of this.observers[hook] ?? []) {
-        parts.push({ [hook]: observer } as Partial<AgentLoopHooks>);
-      }
-    }
-    if (this.params.hookParts) parts.push(...this.params.hookParts);
     if (this.params.toolExecutionHooks) parts.push(this.params.toolExecutionHooks);
     parts.push(...extraParts);
     return composeHooks(parts);
@@ -198,7 +176,6 @@ export class Agent<Key extends AppProviderKey = AppProviderKey> {
       },
     });
     const writer = writable.getWriter();
-    this.currentWriter = writer;
 
     let totalUsage = ZERO_USAGE;
     const hooks = this.composedHooks([
@@ -221,7 +198,6 @@ export class Agent<Key extends AppProviderKey = AppProviderKey> {
     const settleWriter = async (failure?: { error: unknown }) => {
       if (writerSettled) return;
       writerSettled = true;
-      this.currentWriter = undefined;
       try {
         if (failure) await writer.abort(failure.error);
         else await writer.close();

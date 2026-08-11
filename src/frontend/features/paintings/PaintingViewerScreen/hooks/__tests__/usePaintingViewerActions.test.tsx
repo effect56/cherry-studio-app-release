@@ -2,9 +2,12 @@ import type { ApiClient } from '@cherrystudio/universal/data/api/types';
 import type { Painting } from '@cherrystudio/universal/data/types/painting';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useEffect } from 'react';
+import { Linking } from 'react-native';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 
+import { BackendProvider } from '@/frontend/data/BackendProvider';
 import { DataApiProvider } from '@/frontend/data/DataApiProvider';
+import type { Backend } from '@/shared/contracts';
 
 import { usePaintingViewerActions } from '../usePaintingViewerActions';
 
@@ -15,23 +18,30 @@ const mockCreatePaintingDraftHandoff = jest.fn((_input: unknown) => 'handoff');
 const mockCreatePaintingOutputAttachmentDraft = jest.fn((_output: unknown) => ({
   id: 'painting-output',
 }));
-const mockShowMessage = jest.fn();
+const mockAlertConfirm = jest.fn();
+const mockAlertShow = jest.fn();
+const mockCreateAsset = jest.fn();
+const mockGetPermissions = jest.fn();
+const mockRequestPermissions = jest.fn();
+const mockToastShow = jest.fn();
+const mockOpenSettings = jest.spyOn(Linking, 'openSettings');
 
 jest.mock('expo-router', () => ({
   useRouter: () => ({ back: mockRouterBack, push: mockRouterPush }),
 }));
 
 jest.mock('expo-media-library', () => ({
-  Asset: { create: jest.fn() },
-  requestPermissionsAsync: jest.fn(),
+  Asset: { create: (...args: unknown[]) => mockCreateAsset(...args) },
+  getPermissionsAsync: (...args: unknown[]) => mockGetPermissions(...args),
+  requestPermissionsAsync: (...args: unknown[]) => mockRequestPermissions(...args),
 }));
 
 jest.mock('heroui-native/toast', () => ({
-  useToast: () => ({ toast: { show: jest.fn() } }),
+  useToast: () => ({ toast: { show: mockToastShow } }),
 }));
 
-jest.mock('@/frontend/components/AppAlertProvider', () => ({
-  useAppAlert: () => ({ showMessage: mockShowMessage }),
+jest.mock('@/frontend/components/AlertProvider', () => ({
+  useAlert: () => ({ alert: { confirm: mockAlertConfirm, show: mockAlertShow } }),
 }));
 
 jest.mock('react-i18next', () => ({
@@ -51,13 +61,19 @@ const painting = {
   id: '00000000-0000-7000-8000-000000000001',
   prompt: 'Draw a cherry',
 } as Painting;
+const mockCancelGeneration = jest.fn(async () => undefined);
 const dataApi = {
   delete: mockDelete,
-  get: jest.fn(),
+  // Deleting a painting stops any generation still writing into it, so the hook
+  // now reads the painting job list; nothing is running in these cases.
+  get: jest.fn(async () => []),
   patch: jest.fn(),
   post: jest.fn(),
   put: jest.fn(),
 } as unknown as ApiClient;
+const backend = {
+  paintings: { cancelGeneration: mockCancelGeneration },
+} as unknown as Backend;
 let queryClient: QueryClient;
 
 let actions: ReturnType<typeof usePaintingViewerActions> | undefined;
@@ -83,12 +99,18 @@ describe('usePaintingViewerActions', () => {
   beforeEach(async () => {
     jest.clearAllMocks();
     actions = undefined;
+    mockCreateAsset.mockResolvedValue(undefined);
+    mockGetPermissions.mockResolvedValue({ canAskAgain: true, granted: true });
+    mockOpenSettings.mockResolvedValue(undefined);
+    mockRequestPermissions.mockResolvedValue({ canAskAgain: true, granted: true });
     queryClient = new QueryClient({ defaultOptions: { queries: { gcTime: Infinity } } });
     await act(async () => {
       renderer = create(
         <QueryClientProvider client={queryClient}>
           <DataApiProvider dataApi={dataApi}>
-            <Probe />
+            <BackendProvider backend={backend}>
+              <Probe />
+            </BackendProvider>
           </DataApiProvider>
         </QueryClientProvider>,
       );
@@ -106,6 +128,93 @@ describe('usePaintingViewerActions', () => {
       params: { paintingId: painting.id },
       pathname: '/paintings/[paintingId]/conversation',
     });
+  });
+
+  it('saves immediately when write-only photo access is already granted', async () => {
+    await act(async () => actions?.download());
+
+    expect(mockGetPermissions).toHaveBeenCalledWith(true);
+    expect(mockRequestPermissions).not.toHaveBeenCalled();
+    expect(mockCreateAsset).toHaveBeenCalledWith('file:///painting.png');
+  });
+
+  it('requests photo access only after Alert confirmation', async () => {
+    mockGetPermissions.mockResolvedValueOnce({ canAskAgain: true, granted: false });
+
+    await act(async () => actions?.download());
+
+    expect(mockAlertConfirm).toHaveBeenCalledWith({
+      confirmLabel: 'settings.permissions.writeAccess',
+      description: 'painting.viewer.savePermissionDenied',
+      onConfirm: expect.any(Function),
+      title: 'settings.permissions.accessRequired',
+    });
+    expect(mockRequestPermissions).not.toHaveBeenCalled();
+
+    const { onConfirm } = mockAlertConfirm.mock.calls[0][0] as {
+      onConfirm: () => Promise<void>;
+    };
+    await act(onConfirm);
+
+    expect(mockRequestPermissions).toHaveBeenCalledWith(true);
+    expect(mockCreateAsset).toHaveBeenCalledWith('file:///painting.png');
+  });
+
+  it('offers to open system settings when photo access cannot be requested again', async () => {
+    mockGetPermissions.mockResolvedValueOnce({ canAskAgain: false, granted: false });
+
+    await act(async () => actions?.download());
+
+    expect(mockAlertConfirm).toHaveBeenCalledWith({
+      confirmLabel: 'settings.permissions.openSystemSettings',
+      description: 'painting.viewer.savePermissionDenied',
+      onConfirm: expect.any(Function),
+      title: 'settings.permissions.accessRequired',
+    });
+    expect(mockRequestPermissions).not.toHaveBeenCalled();
+
+    const { onConfirm } = mockAlertConfirm.mock.calls[0][0] as {
+      onConfirm: () => Promise<void>;
+    };
+    await act(onConfirm);
+
+    expect(mockOpenSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers system settings when a native permission request is denied permanently', async () => {
+    mockGetPermissions.mockResolvedValueOnce({ canAskAgain: true, granted: false });
+    mockRequestPermissions.mockResolvedValueOnce({ canAskAgain: false, granted: false });
+
+    await act(async () => actions?.download());
+    const { onConfirm } = mockAlertConfirm.mock.calls[0][0] as {
+      onConfirm: () => Promise<void>;
+    };
+    await act(onConfirm);
+
+    expect(mockAlertConfirm).toHaveBeenLastCalledWith({
+      confirmLabel: 'settings.permissions.openSystemSettings',
+      description: 'painting.viewer.savePermissionDenied',
+      onConfirm: expect.any(Function),
+      title: 'settings.permissions.accessRequired',
+    });
+  });
+
+  it('shows a Toast after saving to Photos', async () => {
+    await act(async () => actions?.download());
+
+    expect(mockCreateAsset).toHaveBeenCalledWith('file:///painting.png');
+    expect(mockToastShow).toHaveBeenCalledWith({
+      label: 'painting.viewer.saved',
+      variant: 'success',
+    });
+  });
+
+  it('shows an Alert when saving to Photos fails', async () => {
+    mockCreateAsset.mockRejectedValueOnce(new Error('Save failed'));
+
+    await act(async () => actions?.download());
+
+    expect(mockAlertShow).toHaveBeenCalledWith({ title: 'painting.viewer.saveFailed' });
   });
 
   it('opens edit with the current output attached and no prefilled prompt', () => {
@@ -154,6 +263,6 @@ describe('usePaintingViewerActions', () => {
       pageParams: [undefined],
       pages: [{ items: [painting] }],
     });
-    expect(mockShowMessage).toHaveBeenCalledWith({ title: 'painting.viewer.deleteFailed' });
+    expect(mockAlertShow).toHaveBeenCalledWith({ title: 'painting.viewer.deleteFailed' });
   });
 });

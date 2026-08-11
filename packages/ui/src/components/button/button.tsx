@@ -10,7 +10,7 @@ import { Pressable, Text, type PressableProps, type TextProps, type View } from 
 import { useResolveClassNames } from 'uniwind';
 
 import { cn } from '../../utils';
-import { Spinner, type SpinnerSize } from '../spinner';
+import { Spinner, type SpinnerSize } from '../loading/spinner';
 
 export type ButtonVariant = 'default' | 'destructive' | 'ghost' | 'outline' | 'secondary';
 export type ButtonSize = 'default' | 'lg' | 'sm';
@@ -77,7 +77,7 @@ const variantStyles: Record<ButtonVariant, { label: string; root: string }> = {
   },
   secondary: {
     label: 'text-secondary-foreground',
-    root: 'bg-secondary shadow-none',
+    root: 'border border-border bg-field shadow-none',
   },
 };
 

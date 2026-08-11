@@ -1,3 +1,4 @@
+import type { CallOverrides } from '@cherrystudio/ai-runtime/runtime';
 import { ENDPOINT_TYPE } from '@cherrystudio/provider-registry';
 import type { Assistant } from '@cherrystudio/universal/data/types/assistant';
 import { DEFAULT_ASSISTANT_SETTINGS } from '@cherrystudio/universal/data/types/assistant';
@@ -7,7 +8,6 @@ import type { ReasoningEffortOption } from '@cherrystudio/universal/types/aiSdk'
 
 import { providerRegistryService } from '@/backend/data/services/ProviderRegistryService';
 
-import type { CallOverrides } from '../../../../types/requests';
 import { buildAgentParams } from '../buildAgentParams';
 
 function createProvider(providerId: string): Provider {
@@ -77,14 +77,9 @@ function createAssistant(
 
 function createServices(
   provider: Provider,
-  model: Model,
-  assistant?: Assistant,
   options: { hasMcpTools?: boolean; tools?: Record<string, never> } = {},
 ) {
   return {
-    aiUsageRecord: { recordInvocation: jest.fn(async () => undefined) },
-    assistant: { getById: jest.fn(async () => assistant) },
-    model: { getById: jest.fn(async () => model) },
     preference: {
       get: jest.fn(async () => null),
       getMultipleRawCached: jest.fn(() => ({})),
@@ -141,7 +136,10 @@ async function buildReasoningOptions(input: {
       reasoningEffort: input.requestSelection,
       uniqueModelId: model.id,
     },
-    services: createServices(provider, model, assistant),
+    services: createServices(provider),
+    provider,
+    model,
+    assistant,
   });
 
   return result.options.providerOptions ?? {};
@@ -241,7 +239,10 @@ describe('buildAgentParams reasoning contract', () => {
         reasoningEffort: 'auto',
         uniqueModelId: model.id,
       },
-      services: createServices(provider, model, assistant),
+      services: createServices(provider),
+      provider,
+      model,
+      assistant,
     });
 
     expect(result.sdkConfig.providerId).toBe('google-vertex-maas');
@@ -260,7 +261,10 @@ describe('buildAgentParams reasoning contract', () => {
 
     const result = await buildAgentParams({
       request: { assistantId: assistant.id, uniqueModelId: model.id },
-      services: createServices(provider, model, assistant),
+      services: createServices(provider),
+      provider,
+      model,
+      assistant,
     });
 
     expect(result.options.providerOptions?.vertex).toMatchObject({ reasoningEffort: 'high' });
@@ -277,7 +281,10 @@ describe('buildAgentParams reasoning contract', () => {
 
     const result = await buildAgentParams({
       request: { assistantId: assistant.id, uniqueModelId: model.id },
-      services: createServices(provider, model, assistant, { hasMcpTools: true }),
+      services: createServices(provider, { hasMcpTools: true }),
+      provider,
+      model,
+      assistant,
       shouldIncludeExternalTools: true,
     });
 
@@ -293,9 +300,12 @@ describe('buildAgentParams reasoning contract', () => {
     const assistant = createAssistant(model, 'default');
     const result = await buildAgentParams({
       request: { assistantId: assistant.id, uniqueModelId: model.id },
-      services: createServices(provider, model, assistant, {
+      services: createServices(provider, {
         tools: { web_fetch: {} as never },
       }),
+      provider,
+      model,
+      assistant,
       shouldIncludeExternalTools: true,
     });
 

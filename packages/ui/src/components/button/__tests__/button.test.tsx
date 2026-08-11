@@ -4,7 +4,7 @@ import { useResolveClassNames } from 'uniwind';
 
 import { Button, type ButtonProps, type ButtonSize, type ButtonVariant } from '../button';
 
-jest.mock('../../spinner', () => {
+jest.mock('../../loading/spinner', () => {
   const React = require('react');
   const { View } = require('react-native');
 
@@ -198,7 +198,7 @@ describe('Button', () => {
     },
     {
       labelClassName: 'text-secondary-foreground',
-      rootClassNames: ['bg-secondary', 'shadow-none'],
+      rootClassNames: ['border', 'border-border', 'bg-field', 'shadow-none'],
       variant: 'secondary',
     },
   ])('renders the $variant variant', ({ labelClassName, rootClassNames, variant }) => {

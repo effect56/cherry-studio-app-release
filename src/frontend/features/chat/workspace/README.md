@@ -1,17 +1,20 @@
 # Chat Workspace
 
-This module owns the chat screen workspace: message list, older-message loading indicator, initial
-render cover, and floating input placement.
+This module owns Chat-specific workspace orchestration: runtime message projection, older-message
+loading state, initial render gating, tool approval, and composer placement. The virtualized list
+and message rendering live in `@/frontend/components/messagePresentation`.
 
 ## Public Interface
 
 - `ChatWorkspace` is exported from `index.ts` for normal topic screens.
-- `ChatWorkspaceFrame`, `ChatComposer`, and `useFloatingChatInputLayout` are exported for the
-  new-topic workspace, which shares the same input placement without a message list.
+- `ChatComposer` is exported for the new-topic workspace, which has no message list.
 - Internal workspace pieces should be imported through relative paths inside this module.
+- The docking itself (`ComposerDock`, `useComposerDockLayout`) is not here — it moved to
+  `@/frontend/components/composer` once painting docked an input the same way. Anything that moves
+  an input relative to the keyboard or the safe area belongs there, not in a caller.
 
 ## Organization
 
-- `components/` contains workspace-only UI pieces.
-- `hooks/` owns workspace layout and initial-render coordination.
+- `components/` contains Chat-only composer, loading, and cover UI.
+- `hooks/` owns initial-render coordination.
 - `utils/` contains pure helpers with co-located tests.

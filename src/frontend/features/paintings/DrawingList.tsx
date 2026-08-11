@@ -1,8 +1,7 @@
 import * as ImagePicker from 'expo-image-picker';
 import * as MediaLibrary from 'expo-media-library';
-import { useRouter } from 'expo-router';
-import { useToast } from 'heroui-native/toast';
-import { CheckIcon, ImageIcon } from 'lucide-uniwind/png';
+import { Link, useRouter } from 'expo-router';
+import { CheckIcon, ImageIcon, RotateCcwIcon } from 'lucide-uniwind/png';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -15,6 +14,12 @@ import {
 } from 'react-native';
 import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 
+import { useAlert } from '@/frontend/components/AlertProvider';
+import {
+  COMPOSER_PHOTO_SELECTION_LIMIT,
+  type ComposerInitialAttachment,
+  createPhotoAttachmentDraft,
+} from '@/frontend/components/composer/utils/composerAttachments';
 import {
   useMessageListBottomInset,
   useMessagePendingDeletionIds,
@@ -25,19 +30,11 @@ import {
 } from '@/frontend/components/messageTabs';
 import { Image } from '@/frontend/components/nativePrimitives';
 import { PaintingZoomLink } from '@/frontend/components/navigation';
-import {
-  CHAT_INPUT_PHOTO_SELECTION_LIMIT,
-  type ChatInputPhotoPreview,
-  loadPhotoPreviewPage,
-} from '@/frontend/features/chat/input/hooks/useChatInputPhotoPicker';
-import {
-  type ChatInputAttachmentDraft,
-  createPhotoAttachmentDraft,
-} from '@/frontend/features/chat/input/utils/chatInputAttachments';
+import { PaintingSkeleton } from '@/frontend/components/paintingSkeleton';
 
 import {
   type PaintingGalleryItem,
-  usePaintingGalleryItems,
+  usePaintingGalleryEntries,
   usePaintings,
 } from './hooks/usePaintings';
 import { usePaintingSelectionSource } from './hooks/usePaintingSelectionSource';
@@ -47,6 +44,7 @@ import {
   createPaintingDraftHandoff,
   type PaintingDraftHandoff,
 } from './utils/paintingDraftHandoff';
+import { loadPhotoPreviewPage, type PhotoPreview } from './utils/photoLibrary';
 
 const recentPhotoLimit = 12;
 const galleryGap = 6;
@@ -54,7 +52,7 @@ const pageEdge = 16;
 
 export function DrawingList() {
   const { t } = useTranslation();
-  const { toast } = useToast();
+  const { alert } = useAlert();
   const router = useRouter();
   const { scope } = useMessageScope();
   const { isEditing, selectedIds } = useMessageSelectionState();
@@ -66,14 +64,14 @@ export function DrawingList() {
   const { width: windowWidth } = useWindowDimensions();
   const recentPhotos = useRecentPaintingPhotos(scope === 'drawings');
   const paintings = usePaintings();
-  const gallery = usePaintingGalleryItems(paintings.paintings);
+  const gallery = usePaintingGalleryEntries(paintings.paintings);
   const columnWidth = (windowWidth - pageEdge * 2 - galleryGap) / 2;
   const visibleGalleryItems = useMemo(
     () =>
       pendingDeletionIds.size === 0
-        ? (gallery.data ?? [])
-        : (gallery.data ?? []).filter((item) => !pendingDeletionIds.has(item.painting.id)),
-    [gallery.data, pendingDeletionIds],
+        ? gallery.items
+        : gallery.items.filter((item) => !pendingDeletionIds.has(item.painting.id)),
+    [gallery.items, pendingDeletionIds],
   );
   const columns = useMemo(() => distributeMasonryItems(visibleGalleryItems), [visibleGalleryItems]);
   const namedColumns = [
@@ -89,7 +87,7 @@ export function DrawingList() {
     [router],
   );
   const openPaintingWithAttachments = useCallback(
-    (attachments: readonly ChatInputAttachmentDraft[]) => {
+    (attachments: readonly ComposerInitialAttachment[]) => {
       openPainting({ attachments });
     },
     [openPainting],
@@ -104,18 +102,15 @@ export function DrawingList() {
     [openPainting],
   );
   const handleRecentPhotoPress = useCallback(
-    async (photo: ChatInputPhotoPreview) => {
+    async (photo: PhotoPreview) => {
       try {
         const uri = await new MediaLibrary.Asset(photo.id).getUri();
         openPaintingWithAttachments([createPhotoAttachmentDraft({ ...photo, uri })]);
       } catch (error) {
-        toast.show({
-          label: error instanceof Error ? error.message : String(error),
-          variant: 'danger',
-        });
+        alert.show({ title: error instanceof Error ? error.message : String(error) });
       }
     },
-    [openPaintingWithAttachments, toast],
+    [alert, openPaintingWithAttachments],
   );
   const handleViewAllPress = useCallback(async () => {
     try {
@@ -128,7 +123,7 @@ export function DrawingList() {
         mediaTypes: ['images'],
         orderedSelection: true,
         quality: 1,
-        selectionLimit: CHAT_INPUT_PHOTO_SELECTION_LIMIT,
+        selectionLimit: COMPOSER_PHOTO_SELECTION_LIMIT,
       });
       if (result.canceled || result.assets.length === 0) {
         return;
@@ -147,12 +142,9 @@ export function DrawingList() {
       });
       openPaintingWithAttachments(attachments);
     } catch (error) {
-      toast.show({
-        label: error instanceof Error ? error.message : String(error),
-        variant: 'danger',
-      });
+      alert.show({ title: error instanceof Error ? error.message : String(error) });
     }
-  }, [openPaintingWithAttachments, toast]);
+  }, [alert, openPaintingWithAttachments]);
 
   return (
     <ScrollView
@@ -169,6 +161,7 @@ export function DrawingList() {
         }
       }}
       scrollEventThrottle={160}
+      showsVerticalScrollIndicator={false}
       testID="drawing-home-scroll"
     >
       {isEditing ? null : (
@@ -262,7 +255,9 @@ export function DrawingList() {
             <View className="flex-1 gap-1.5" key={column.key}>
               {column.items.map((item) => (
                 <DrawingGridItem
+                  generatingLabel={t('painting.status.generating')}
                   height={columnWidth / item.aspectRatio}
+                  interruptedLabel={t('painting.status.interrupted')}
                   isEditing={isEditing}
                   isSelected={selectedIds.has(item.painting.id)}
                   item={item}
@@ -285,7 +280,9 @@ export function DrawingList() {
 }
 
 type DrawingGridItemProps = {
+  generatingLabel: string;
   height: number;
+  interruptedLabel: string;
   isEditing: boolean;
   isSelected: boolean;
   item: PaintingGalleryItem;
@@ -294,29 +291,29 @@ type DrawingGridItemProps = {
 };
 
 function DrawingGridItem({
+  generatingLabel,
   height,
+  interruptedLabel,
   isEditing,
   isSelected,
   item,
   label,
   onToggle,
 }: DrawingGridItemProps) {
-  const image = (
-    <Image
-      cachePolicy="memory-disk"
-      contentFit="cover"
-      source={item.uri}
-      style={{ height: '100%', width: '100%' }}
-      transition={120}
-    />
-  );
+  const content = renderTileContent(item, generatingLabel, interruptedLabel);
+  const accessibilityLabel =
+    item.kind === 'output'
+      ? label
+      : item.kind === 'generating'
+        ? generatingLabel
+        : interruptedLabel;
 
   // A Link navigates on tap regardless of onPress, so editing mode must drop
-  // the PaintingZoomLink wrapper entirely to turn taps into selection.
+  // the link wrapper entirely to turn taps into selection.
   if (isEditing) {
     return (
       <Pressable
-        accessibilityLabel={label}
+        accessibilityLabel={accessibilityLabel}
         accessibilityRole="checkbox"
         accessibilityState={{ checked: isSelected }}
         className="overflow-hidden rounded-md bg-secondary active:opacity-75"
@@ -324,7 +321,7 @@ function DrawingGridItem({
         style={{ height }}
         testID={`painting-history-${item.key}`}
       >
-        {image}
+        {content}
         <Animated.View
           className="absolute top-1.5 right-1.5"
           entering={FadeIn.duration(160)}
@@ -342,24 +339,76 @@ function DrawingGridItem({
     );
   }
 
-  return (
+  const tile = (
+    <Pressable
+      accessibilityLabel={accessibilityLabel}
+      accessibilityRole="button"
+      className="overflow-hidden rounded-md bg-secondary active:opacity-75"
+      style={{ height }}
+      testID={`painting-history-${item.key}`}
+    >
+      {content}
+    </Pressable>
+  );
+
+  // A receipt without images has nothing for the viewer to zoom into: tapping
+  // it goes back to the composer, which is where its progress — or its retry —
+  // lives.
+  return item.kind === 'output' ? (
     <PaintingZoomLink fileEntryId={item.fileEntryId} paintingId={item.painting.id}>
-      <Pressable
-        accessibilityLabel={label}
-        accessibilityRole="button"
-        className="overflow-hidden rounded-md bg-secondary active:opacity-75"
-        style={{ height }}
-        testID={`painting-history-${item.key}`}
-      >
-        {image}
-      </Pressable>
+      {tile}
     </PaintingZoomLink>
+  ) : (
+    <Link asChild href={{ pathname: '/paintings', params: { paintingId: item.painting.id } }}>
+      {tile}
+    </Link>
+  );
+}
+
+function renderTileContent(
+  item: PaintingGalleryItem,
+  generatingLabel: string,
+  interruptedLabel: string,
+) {
+  if (item.kind === 'output') {
+    return (
+      <Image
+        cachePolicy="memory-disk"
+        contentFit="cover"
+        source={item.uri}
+        style={{ height: '100%', width: '100%' }}
+        transition={120}
+      />
+    );
+  }
+
+  if (item.kind === 'generating') {
+    return (
+      <PaintingSkeleton
+        accessibilityLabel={generatingLabel}
+        testID={`painting-history-skeleton-${item.painting.id}`}
+      />
+    );
+  }
+
+  return (
+    <View className="flex-1 items-center justify-center gap-1 px-2">
+      <RotateCcwIcon className="size-5 text-foreground-tertiary" strokeWidth={1.5} />
+      <Text className="text-center font-medium text-foreground-secondary text-xs">
+        {interruptedLabel}
+      </Text>
+      {item.message ? (
+        <Text className="text-center text-foreground-tertiary text-xs" numberOfLines={2}>
+          {item.message}
+        </Text>
+      ) : null}
+    </View>
   );
 }
 
 function useRecentPaintingPhotos(enabled: boolean) {
   const [isLoading, setLoading] = useState(true);
-  const [photos, setPhotos] = useState<ChatInputPhotoPreview[]>([]);
+  const [photos, setPhotos] = useState<PhotoPreview[]>([]);
 
   useEffect(() => {
     if (!enabled) {

@@ -8,7 +8,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
-import { useAppAlert } from '@/frontend/components/AppAlertProvider';
+import { useAlert } from '@/frontend/components/AlertProvider';
 import { BackHeader, type HeaderToolbarAction } from '@/frontend/components/headers';
 import { useBackendModule, useMutation } from '@/frontend/data';
 import {
@@ -21,10 +21,12 @@ import { openExternalUrl } from '@/frontend/utils/openExternalUrl';
 import {
   buildApiKeyEntriesFromInput,
   buildApiKeysInputFromEntries,
+  buildProviderPrimaryBaseUrlUpdates,
   canEditProviderEndpoint,
   getEffectiveAuthConfig,
   getProviderPrimaryBaseUrl,
   normalizeApiKeyEntries,
+  ProviderApiServiceSaveError,
   shouldShowApiKeys,
   useProviderApiServiceQueries,
 } from './apiService';
@@ -46,7 +48,7 @@ export default function ProviderDetailSettingsScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const { showConfirmation, showMessage } = useAppAlert();
+  const { alert } = useAlert();
   const providers = useBackendModule('providers');
   const [apiKeysVisible, setApiKeysVisible] = useState(false);
   const [activeTab, setActiveTab] = useState<ProviderDetailTab>('configuration');
@@ -73,8 +75,14 @@ export default function ProviderDetailSettingsScreen() {
     },
     refresh: ['/providers'],
   });
-  const { apiKeys, apiKeysQuery, authConfig, authConfigQuery, replaceApiKeysMutation } =
-    useProviderApiServiceQueries(providerId ?? '');
+  const {
+    apiKeys,
+    apiKeysQuery,
+    authConfig,
+    authConfigQuery,
+    replaceApiKeysMutation,
+    saveProviderMutation,
+  } = useProviderApiServiceQueries(providerId ?? '');
   const { isPreviewLoading: isModelPullLoading, loadPullPreview } = useProviderModelPull({
     onPreviewReady: (preview) => {
       if (!providerId) {
@@ -86,7 +94,10 @@ export default function ProviderDetailSettingsScreen() {
     providerId: providerId ?? '',
   });
   const canEditEndpoint = canEditProviderEndpoint(provider);
-  const showApiKeys = shouldShowApiKeys(getEffectiveAuthConfig(authConfig, provider).type);
+  const showApiKeys = shouldShowApiKeys(
+    getEffectiveAuthConfig(authConfig, provider).type,
+    provider,
+  );
   const apiKeysInput = useMemo(
     () => buildApiKeysInputFromEntries(normalizeApiKeyEntries(apiKeys ?? [])),
     [apiKeys],
@@ -135,10 +146,42 @@ export default function ProviderDetailSettingsScreen() {
       const nextApiKeys = buildApiKeyEntriesFromInput(input, apiKeys ?? []);
 
       void replaceApiKeysMutation.mutateAsync(nextApiKeys).catch(() => {
-        toast.show({ label: t('settings.provider.apiService.saveFailed'), variant: 'danger' });
+        alert.show({ title: t('settings.provider.apiService.saveFailed') });
       });
     },
-    [apiKeys, replaceApiKeysMutation, t, toast],
+    [alert, apiKeys, replaceApiKeysMutation, t],
+  );
+  const commitBaseUrl = useCallback(
+    async (baseUrl: string): Promise<boolean> => {
+      if (!provider) {
+        return false;
+      }
+
+      try {
+        const updates = buildProviderPrimaryBaseUrlUpdates({ baseUrl, provider });
+        if (
+          updates.endpointConfigs[updates.defaultChatEndpoint]?.baseUrl ===
+          getProviderPrimaryBaseUrl(provider).trim()
+        ) {
+          return true;
+        }
+
+        await saveProviderMutation.mutateAsync(updates);
+        return true;
+      } catch (error) {
+        if (error instanceof ProviderApiServiceSaveError) {
+          alert.show({
+            description: t('settings.provider.apiService.invalidBaseUrlMessage'),
+            title: t('settings.provider.apiService.invalidBaseUrlTitle'),
+          });
+        } else {
+          alert.show({ title: t('settings.provider.apiService.saveFailed') });
+        }
+
+        return false;
+      }
+    },
+    [alert, provider, saveProviderMutation, t],
   );
   const openModelAddSettings = useCallback(() => {
     if (!providerId) {
@@ -250,22 +293,22 @@ export default function ProviderDetailSettingsScreen() {
         toast.show({ label: t('settings.provider.toast.deleted'), variant: 'success' });
       })
       .catch(() => {
-        showMessage({ title: t('settings.provider.toast.deleteFailed') });
+        alert.show({ title: t('settings.provider.toast.deleteFailed') });
       });
-  }, [deleteProviderMutation, providerId, router, showMessage, t, toast]);
+  }, [alert, deleteProviderMutation, providerId, router, t, toast]);
   const requestDeleteProvider = useCallback(() => {
     if (!provider || !providers.canRemove(provider)) {
       return;
     }
 
-    showConfirmation({
+    alert.confirm({
       confirmLabel: t('common.delete'),
       description: t('settings.provider.delete.message', { name: provider.name }),
       onConfirm: handleDeleteProvider,
       role: 'destructive',
       title: t('settings.provider.delete.title'),
     });
-  }, [handleDeleteProvider, provider, providers, showConfirmation, t]);
+  }, [alert, handleDeleteProvider, provider, providers, t]);
 
   if (!providerId || providerQuery.isError) {
     return <Redirect href="/settings/provider" />;
@@ -312,6 +355,7 @@ export default function ProviderDetailSettingsScreen() {
               onApiKeysCommit={commitApiKeys}
               onApiKeysManagePress={openApiKeySettings}
               onApiKeysVisibleToggle={() => setApiKeysVisible((visible) => !visible)}
+              onBaseUrlCommit={commitBaseUrl}
               onBaseUrlManagePress={openEndpointSettings}
             />
           )}

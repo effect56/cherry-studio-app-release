@@ -11,10 +11,10 @@ const assistantB = { emoji: 'B', id: 'assistant-b', name: 'Assistant B' } as Ass
 const mockDeleteAssistant = jest.fn(async () => undefined);
 const mockPush = jest.fn();
 const mockSetBottomTabBarHidden = jest.fn();
-const mockShowConfirmation = jest.fn((options: ConfirmationOptions) => {
+const mockAlertConfirm = jest.fn((options: ConfirmationOptions) => {
   currentConfirmation = options;
 });
-const mockShowMessage = jest.fn();
+const mockAlertShow = jest.fn();
 let currentConfirmation: ConfirmationOptions | undefined;
 let deletion = deferred<void>();
 let mockAssistants: readonly Assistant[] = [assistantA, assistantB];
@@ -29,30 +29,10 @@ jest.mock('lucide-uniwind/png', () => ({
   BotIcon: () => null,
   CheckIcon: () => null,
   PlusIcon: () => null,
-  Trash2Icon: () => null,
 }));
 
 jest.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
-}));
-
-jest.mock('react-native-gesture-handler', () => {
-  const chain = {
-    maxDistance: () => chain,
-    onBegin: () => chain,
-    onEnd: () => chain,
-    onFinalize: () => chain,
-  };
-
-  return {
-    Gesture: { Tap: () => chain },
-    GestureDetector: ({ children }: { children: ReactNode }) => children,
-  };
-});
-
-jest.mock('react-native-gesture-handler/ReanimatedSwipeable', () => ({
-  __esModule: true,
-  default: ({ children }: { children: ReactNode }) => children,
 }));
 
 jest.mock('react-native-reanimated', () => {
@@ -63,16 +43,15 @@ jest.mock('react-native-reanimated', () => {
     default: { View: MockView },
     FadeInLeft: { duration: () => undefined },
     FadeOutLeft: { duration: () => undefined },
-    runOnJS: (callback: (...args: unknown[]) => unknown) => callback,
-    useAnimatedStyle: (factory: () => unknown) => factory(),
-    useSharedValue: (value: number) => ({ value }),
   };
 });
 
-jest.mock('@/frontend/components/AppAlertProvider', () => ({
-  useAppAlert: () => ({
-    showConfirmation: mockShowConfirmation,
-    showMessage: mockShowMessage,
+jest.mock('@/frontend/components/AlertProvider', () => ({
+  useAlert: () => ({
+    alert: {
+      confirm: mockAlertConfirm,
+      show: mockAlertShow,
+    },
   }),
 }));
 
@@ -110,6 +89,12 @@ jest.mock('@/frontend/components/messageTabs/SelectionToolbar/SelectionToolbar',
 });
 
 jest.mock('@/frontend/components/navigation', () => ({
+  ContextMenuLink: ({ children, ...props }: { children: ReactNode }) => {
+    const React = jest.requireActual('react');
+    const { View } = jest.requireActual('react-native');
+
+    return React.createElement(View, { ...props, testID: 'assistant-context-link' }, children);
+  },
   useSetBottomTabBarHidden: () => mockSetBottomTabBarHidden,
 }));
 
@@ -119,14 +104,6 @@ jest.mock('@/frontend/hooks/chat', () => ({
     deleteAssistants: mockDeleteAssistants,
   }),
   useAssistantsApi: () => ({ assistants: mockAssistants, isLoading: false }),
-}));
-
-jest.mock('@/frontend/hooks/useExclusiveSwipeable', () => ({
-  useExclusiveSwipeable: () => ({
-    closeOpen: jest.fn(),
-    notifyClose: jest.fn(),
-    notifyWillOpen: jest.fn(),
-  }),
 }));
 
 describe('AssistantListScreen batch deletion', () => {
@@ -163,6 +140,41 @@ describe('AssistantListScreen batch deletion', () => {
     });
   }
 
+  it('links to assistant details and exposes edit and delete context actions', async () => {
+    const link = renderer?.root.findAllByProps({ testID: 'assistant-context-link' })[0];
+    expect(link?.props.href).toEqual({
+      pathname: '/assistants/[assistantId]',
+      params: { assistantId: 'assistant-a' },
+    });
+    expect(link?.props.preview).toBe(false);
+
+    const editAction = link?.props.items.find((item: { id: string }) => item.id === 'edit');
+    const deleteAction = link?.props.items.find((item: { id: string }) => item.id === 'delete');
+
+    await act(async () => editAction?.onPress());
+    expect(mockPush).toHaveBeenCalledWith({
+      pathname: '/assistants/[assistantId]/edit',
+      params: { assistantId: 'assistant-a' },
+    });
+
+    await act(async () => deleteAction?.onPress());
+    expect(mockAlertConfirm).toHaveBeenCalledWith(
+      expect.objectContaining({ role: 'destructive', title: 'assistant.delete.title' }),
+    );
+  });
+
+  it('keeps a divider between assistant rows', () => {
+    const row = renderer?.root.findByProps({ accessibilityLabel: assistantA.name });
+    const divider = row?.findAll(
+      (node) =>
+        typeof node.props.className === 'string' &&
+        node.props.className.includes('border-b') &&
+        node.props.className.includes('border-border'),
+    );
+
+    expect(divider?.length).toBeGreaterThan(0);
+  });
+
   it('hides the selected assistant before the batch request settles', async () => {
     await selectAssistantAForDeletion();
 
@@ -198,7 +210,7 @@ describe('AssistantListScreen batch deletion', () => {
       await deletion.promise.catch(() => undefined);
     });
 
-    expect(mockShowMessage).toHaveBeenCalledWith({ title: 'assistant.selection.deleteFailed' });
+    expect(mockAlertShow).toHaveBeenCalledWith({ title: 'assistant.selection.deleteFailed' });
     expect(renderer?.root.findAllByProps({ accessibilityLabel: assistantA.name })).not.toHaveLength(
       0,
     );
